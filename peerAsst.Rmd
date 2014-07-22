@@ -1,0 +1,118 @@
+Human activity recognition
+==========================
+
+In this project, we predict the manner in which 6 people did barbell lifts based on the measurements from accelerometers on the belt, forearm, arm, and dumbell.
+
+We have two sets of data: *training* and *testing*. The exercise consists in creating a model from the *training* set and apply it to the *testing* set to guess the manner the people did their exercise.
+
+## Load and clean the data
+
+Several columns in the data consist mostly in NAs. Those columns will not be useful for our analysis, thus we remove them. Then, we remove the columns that do not appear on both testing and training sets and those that are not useful for the prediction (`X`, `user_name`, `raw_timestamp_part_1`, `raw_timestamp_part_2`, `cvtd_timestamp`, `new_window` and `num_window`).
+
+
+```{r loadclean, cache=TRUE}
+training <- read.csv('pml-training.csv')
+testing <- read.csv('pml-testing.csv')
+
+# lots of columns with NAs there, omit them
+
+trainNAs <- sapply(training,function(x) sum(as.numeric(is.na(x))))
+testNAs <- sapply(testing,function(x) sum(as.numeric(is.na(x))))
+
+training <- training[,trainNAs == 0]
+testing <- testing[,testNAs == 0]
+
+namesboth <- intersect(names(training),names(testing))
+
+training <- training[,c("classe",namesboth[-(1:7)])]
+testing <- testing[,namesboth[-(1:7)]]
+```
+
+No predictors have near-zero variance, we cannot reduce the numbers of predictors any more at this point.
+
+## The model
+
+We split the training data in training/validation with a ratio of 60:40 in order to estimate out of sample error and we apply a Random Forest algorithm with Cross-Validated (10 fold) resampling to the training data (approx 11k samples).
+
+At first, Random Forest was applied with no further control, but since after 2 hours the computations were not over, other options were tried.
+
+To keep the model as simple as possible, no preprocessing is applied.
+
+```{r themodel, cache=TRUE, message=FALSE, warning=FALSE}
+library(caret)
+set.seed(8)
+inTrain <- createDataPartition(training$classe, p=0.6, list=FALSE)
+trainP <- training[inTrain,]
+testP <- training[-inTrain,]
+
+tF <- system.time(
+  modelFit <- train(classe ~ ., data=trainP, method="rf", 
+                    trControl = trainControl(method='cv'))
+  )
+```
+
+The training algorithm ran for the following amount of minutes ona dual-core 1.4GHz Westmere processor:
+
+```{r timing}
+tF['elapsed']/60.
+```
+
+The model has an accuracy that varies with respect to the number of randomly selected predictors:
+
+```{r plots, fig.align='center', fig.width=6, fig.height=4.5}
+library(ggplot2)
+ggplot(modelFit)
+```
+
+The best accuracy is `r modelFit$results[modelFit$results$mtry==modelFit$bestTune[1,1],'Accuracy']`, and we're pretty happy with this.
+
+We can display the variables' importance with respect to the model:
+
+```{r importance, message=FALSE, warning=FALSE}
+plot(varImp(modelFit, scale=TRUE), top=20)
+```
+
+By applying our model to the testing partition, we can evaluate out of sample error via a confusion matrix. We output the accuracy as well as the confusion matrix.
+
+```{r accuracy, cache=TRUE, message=FALSE, warning=FALSE}
+prediction <- predict(modelFit, testP)
+cm <- confusionMatrix(testP$classe, prediction)
+cm$overall['Accuracy']
+```
+
+Accuracy looks pretty good.
+
+```{r confusion, cache=TRUE, fig.align='center', fig.height=5.25,, fig.width=6, message=FALSE, warning=FALSE}
+ggplot() +
+geom_tile(aes(x=Reference, y=Prediction,fill=Freq),data=as.data.frame(cm$table), color="black",size=0.1)  +
+labs(x="Actual",y="Predicted") +
+geom_text(aes(x=Reference,y=Prediction, label=sprintf("%.0f", Freq)),data=as.data.frame(cm$table), size=3, colour="black") +
+scale_fill_gradient(low="grey",high="red") + 
+geom_tile(aes(x=Reference,y=Prediction),data=subset(as.data.frame(cm$table), as.character(Reference)==as.character(Prediction)), color="black",size=0.5, fill="black", alpha=0) +
+    ylim(rev(levels(as.data.frame(cm$table)$Prediction))) 
+```
+
+The confusion matrix suggests we can trust this model for this exercise, at least.
+
+## Prediction
+
+Now, we apply our machine learning algorithm to the 20 test cases available in the test data.
+
+```{r prediction, message=FALSE, warning=FALSE}
+resu <- predict(modelFit, testing)
+answers = as.character(resu)
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(answers)
+answers
+```
+
+## References
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. <a href="http://groupware.les.inf.puc-rio.br/work.jsf?p1=11201">Qualitative Activity Recognition of Weight Lifting Exercises</a>. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
